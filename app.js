@@ -204,7 +204,13 @@ const FRAME_CSS = [
   '.bar{display:none!important}',
   'body{background:transparent}',
   '.paper{margin:0 auto 40px;border-radius:12px}',
-  'img[data-pc]{background:rgba(127,127,127,.08);min-height:40px}'
+  'img[data-pc]{background:rgba(127,127,127,.08);min-height:40px}',
+  // 이미 저장된 글에도 소급 적용되도록 폭 제한은 여기서 한 번 더 건다
+  'img,video,iframe,embed,object{max-width:100%;height:auto}',
+  '.se-component,.se-section,.se-module,.se-component-content{max-width:100%}',
+  '.se-oglink-thumbnail,.se-oglink-thumbnail-resource{max-width:100%;height:auto}',
+  '.se-table{overflow-x:auto;-webkit-overflow-scrolling:touch}',
+  'a{overflow-wrap:anywhere}'
 ].join('\n');
 
 async function renderArticle(id) {
