@@ -21,6 +21,16 @@ const el = (t, c, x) => { const n = document.createElement(t); if (c) n.classNam
                           if (x != null) n.textContent = x; return n; };
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
+// 보관 정리: 발행 30일 뒤 '삭제 예정'(exp = 삭제일), 거기서 14일 뒤 실제 삭제(gone).
+// 삭제된 글은 목록에서 빼지만 색인에는 자리표시로 남겨, 텔레그램에 나간 옛 링크가
+// '없는 글'로 끝나지 않고 원문으로 이어지게 한다.
+const live = a => !a.gone;
+function daysLeft(a) {
+  if (!a.exp) return null;
+  const t = new Date(a.exp + 'T23:59:59') - new Date();
+  return Math.max(0, Math.ceil(t / 86400000));
+}
+
 let INDEX = null;                   // index.json
 let ACOF  = {};                     // 채널id → 색
 const BLOBS = new Map();            // repo 경로 → objectURL (세션 캐시)
@@ -104,6 +114,8 @@ function row(a, showCh) {
   if (a.d) mt.append(el('span', null, a.d));
   if (a.img) mt.append(el('span', 'dot'), el('span', null, '이미지 ' + a.img));
   if (a.miss) mt.append(el('span', 'dot'), el('span', null, '유실 ' + a.miss));
+  const dd = daysLeft(a);
+  if (dd !== null) mt.append(el('span', 'pill exp', '🗑 D-' + dd));
   bd.append(mt);
   link.append(bd);
   return link;
@@ -144,14 +156,14 @@ function renderHome() {
   w.append(el('h2', 'sec', '최근 글'));
   const box = el('div', 'list');
   w.append(box);
-  listInto(box, INDEX.articles || [], true);
+  listInto(box, (INDEX.articles || []).filter(live), true);
   return w;
 }
 
 /* ── 화면: 채널 ─────────────────────────── */
 function renderChannel(id) {
   const c = chOf(id);
-  const all = (INDEX.articles || []).filter(a => a.ch === id);
+  const all = (INDEX.articles || []).filter(a => a.ch === id && live(a));
   const w = el('div', 'wrap');
   w.style.setProperty('--ac', ACOF[id] || 'var(--accent)');
   w.append(el('h2', 'sec', c.emoji + ' ' + c.label + ' · ' + all.length.toLocaleString() + '편'));
@@ -258,6 +270,24 @@ async function renderArticle(id) {
     return wrap;
   }
   const c = chOf(a.ch);
+  if (a.gone) {
+    const box = el('div', 'wrap');
+    const g = el('div', 'tomb');
+    g.append(el('div', 'tomb-em', '🗑'),
+             el('h2', null, a.t || '(제목 없음)'),
+             el('p', null, c.emoji + ' ' + c.label + (a.d ? ' · ' + a.d : '')),
+             el('p', 'dimmed', (a.del || '') + ' 에 보관 기간이 끝나 저장본을 삭제했습니다.'));
+    if (a.src) {
+      const go = el('a', 'tomb-go', '네이버 원문으로 ↗');
+      go.href = a.src; go.target = '_blank'; go.rel = 'noopener';
+      g.append(go);
+    }
+    const home = el('a', 'tomb-back', '← 목록으로');
+    home.href = '#/c/' + a.ch;
+    g.append(home);
+    box.append(g);
+    return box;
+  }
   const bar = el('div', 'rbar');
   const back = el('a', 'back', '← 목록');
   back.href = '#/c/' + a.ch;
@@ -296,7 +326,14 @@ async function renderArticle(id) {
   bar.append(grow);
 
   const prog = el('div', 'prog');
-  wrap.append(bar, prog, frame);
+  wrap.append(bar, prog);
+  const dd = daysLeft(a);
+  if (dd !== null) {
+    wrap.append(el('div', 'expbar',
+      '🗑 이 저장본은 ' + a.exp + ' 에 삭제됩니다 (D-' + dd + '). '
+      + '남기려면 premium-contents 의 keep.json 에 ' + a.id + ' 를 넣으세요.'));
+  }
+  wrap.append(frame);
 
   const html = await ghRaw(a.p + '/index.html');
   const doc = new DOMParser().parseFromString(html, 'text/html');
