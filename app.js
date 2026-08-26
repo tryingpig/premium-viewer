@@ -28,8 +28,20 @@ class AuthError extends Error {}
 const getPat = () => localStorage.getItem(KEY) || '';
 const setPat = v => v ? localStorage.setItem(KEY, v) : localStorage.removeItem(KEY);
 
+/* ── 로컬 모드 ─────────────────────────────
+ * localhost 로 띄우면 토큰 없이 옆에 있는 파일을 그대로 읽는다.
+ * premium-contents 클론 안에 이 뷰어 3개 파일을 복사해 두고
+ *   py -m http.server 8000
+ * 을 돌리면 네트워크 없이도 아카이브 전체를 볼 수 있다. */
+const LOCAL = ['localhost', '127.0.0.1', ''].indexOf(location.hostname) >= 0;
+
 /* ── private repo 읽기 ───────────────────── */
 async function ghRaw(path, asBlob) {
+  if (LOCAL) {
+    const r = await fetch('./' + path);
+    if (!r.ok) throw new Error('로컬 읽기 실패 ' + r.status + ': ' + path);
+    return asBlob ? r.blob() : r.text();
+  }
   const pat = getPat();
   if (!pat) throw new AuthError('토큰이 없습니다');
   const url = 'https://api.github.com/repos/' + OWNER + '/' + REPO + '/contents/' + path + '?ref=main';
