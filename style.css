@@ -111,3 +111,31 @@ dialog input{width:100%;padding:10px 12px;border-radius:10px;border:1px solid va
 .row button{padding:9px 16px;border-radius:10px;font-size:14px;cursor:pointer;font-family:inherit;font-weight:600}
 .primary{background:var(--accent);color:#fff;border:0}
 .ghost{background:none;border:1px solid var(--line);color:var(--dim)}
+
+/* ── 스크롤하면 접히는 상단바 ─────────────── */
+.top{transition:transform .22s ease}
+.top.hide{transform:translateY(-100%)}
+
+/* ── 글자 크기 버튼 ───────────────────────── */
+.rbar .grow{align-items:center}
+button.fs{border:1px solid var(--line);background:var(--card);color:var(--dim);cursor:pointer;
+  font-family:inherit;font-size:13px;font-weight:600;padding:5px 9px;border-radius:8px;line-height:1}
+button.fs:hover{color:var(--ink);border-color:var(--dim)}
+button.fs:active{transform:scale(.94)}
+
+/* ── 이미지 확대 ─────────────────────────── */
+.lb{position:fixed;inset:0;z-index:60;background:#0b0b0d;overscroll-behavior:contain;
+  touch-action:none;user-select:none;-webkit-user-select:none}
+.lb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;
+  -webkit-user-drag:none;user-select:none}
+.lb-x{position:fixed;top:calc(env(safe-area-inset-top,0px) + 12px);right:12px;z-index:2;
+  width:40px;height:40px;border-radius:99px;border:0;cursor:pointer;
+  background:rgba(255,255,255,.14);color:#fff;font-size:17px;line-height:1;
+  backdrop-filter:blur(6px)}
+.lb-x:hover{background:rgba(255,255,255,.24)}
+.lb-hint{position:fixed;left:50%;transform:translateX(-50%);
+  bottom:calc(env(safe-area-inset-bottom,0px) + 20px);z-index:2;pointer-events:none;
+  padding:7px 14px;border-radius:99px;background:rgba(0,0,0,.55);color:#e8e8ea;
+  font-size:12px;white-space:nowrap;backdrop-filter:blur(6px);
+  transition:opacity .5s ease}
+.lb-hint.gone{opacity:0}

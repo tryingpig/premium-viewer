@@ -9,7 +9,9 @@
 const OWNER = 'tryingpig';
 const REPO  = 'premium-contents';
 const KEY   = 'pc.pat';
+const FSKEY = 'pc.fs';
 const PAGE  = 30;                   // 목록 한 번에 그리는 개수
+const FS_MIN = 15, FS_MAX = 22;     // 본문 글자 크기 범위(px)
 
 // 채널 구분색. 목록에서 어느 채널 글인지 색으로 먼저 읽히게 한다.
 const ACCENTS = ['#e0803c', '#7b61c9', '#2f8f6b', '#c05a7d', '#3b7fd4'];
@@ -17,6 +19,7 @@ const ACCENTS = ['#e0803c', '#7b61c9', '#2f8f6b', '#c05a7d', '#3b7fd4'];
 const $  = (s, r = document) => r.querySelector(s);
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c;
                           if (x != null) n.textContent = x; return n; };
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 let INDEX = null;                   // index.json
 let ACOF  = {};                     // 채널id → 색
@@ -197,22 +200,56 @@ function renderChannel(id) {
   return w;
 }
 
-/* ── 화면: 기사 ─────────────────────────── */
-// 뷰어 안에서는 저장본 자체의 상단 바를 숨기고 종이를 화면에 꽉 채운다.
-// (그 바는 repo 를 그냥 폴더로 열었을 때를 위한 것이다)
+/* ── 저장본에 덧입히는 CSS ─────────────────
+ * 뷰어 안에서는 저장본 자체의 상단 바를 숨기고 종이를 화면에 꽉 채운다.
+ * (그 바는 repo 를 그냥 폴더로 열었을 때를 위한 것이다)
+ * 폭 제한과 글자 크기도 여기서 한 번 더 걸어야 이미 저장된 글에 소급 적용된다. */
 const FRAME_CSS = [
   '.bar{display:none!important}',
   'body{background:transparent}',
   '.paper{margin:0 auto 40px;border-radius:12px}',
   'img[data-pc]{background:rgba(127,127,127,.08);min-height:40px}',
-  // 이미 저장된 글에도 소급 적용되도록 폭 제한은 여기서 한 번 더 건다
+  // 가로 밀림 방지 — 링크카드 썸네일이 폭 제한에서 빠져 문서가 통째로 밀렸었다
   'img,video,iframe,embed,object{max-width:100%;height:auto}',
   '.se-component,.se-section,.se-module,.se-component-content{max-width:100%}',
   '.se-oglink-thumbnail,.se-oglink-thumbnail-resource{max-width:100%;height:auto}',
   '.se-table{overflow-x:auto;-webkit-overflow-scrolling:touch}',
-  'a{overflow-wrap:anywhere}'
+  'a{overflow-wrap:anywhere}',
+  // 프리즘플레이어 잔재는 x=30,014px 에 눌러앉아 문서를 3만 픽셀로 늘린다(폰 가로 밀림의 원인)
+  '.prismplayer-area,[class*=\"pzp\"]{display:none!important}',
+  '.snapshot-video{padding:26px 16px;border:1px dashed #d4d4d8;border-radius:6px;' +
+    'text-align:center;color:#71717a;font-size:14px}',
+  // 글자 크기는 변수 하나로 몰아 원문의 크기 위계(fs16/19/24/28)를 비율로 유지한다
+  ':root{--fs:16px}',
+  '.se-text-paragraph,.se-text-list-item{font-size:var(--fs);line-height:1.8}',
+  '.se-fs-fs16{font-size:var(--fs)}',
+  '.se-fs-fs19{font-size:calc(var(--fs)*1.19)}',
+  '.se-fs-fs24{font-size:calc(var(--fs)*1.5)}',
+  '.se-fs-fs28{font-size:calc(var(--fs)*1.75)}',
+  '.se-cell .se-text-paragraph{font-size:calc(var(--fs)*.88);line-height:1.5}',
+  '.se-text-paragraph,.se-text-list-item{overflow-wrap:break-word}',
+  '.se-quote .se-text-paragraph{font-size:calc(var(--fs)*1.12)}',
+  // 눌러서 키우는 것이라는 걸 커서로 알린다
+  '.se-image img,.se-imageGroup img,.se-imageStrip img{cursor:zoom-in}',
+  // 폰: 좌우 여백을 줄여 본문 폭을 넘긴다. 종이 여백보다 한 줄에 들어가는 글자 수가 중요하다
+  '@media(max-width:640px){:root{--fs:17px}.paper{padding:24px 14px 40px;border-radius:0}' +
+    '.paper h1{font-size:21px}.se-component{margin-bottom:22px}}'
 ].join('\n');
 
+const getFs = () => {
+  const v = parseInt(localStorage.getItem(FSKEY) || '', 10);
+  return isNaN(v) ? 0 : clamp(v, FS_MIN, FS_MAX);
+};
+
+/** 저장한 글자 크기를 저장본 문서에 적용. 0이면 CSS 기본값(화면 폭에 따라 16/17px). */
+function applyFs(doc) {
+  if (!doc) return;
+  const v = getFs();
+  if (v) doc.documentElement.style.setProperty('--fs', v + 'px');
+  else doc.documentElement.style.removeProperty('--fs');
+}
+
+/* ── 화면: 기사 ─────────────────────────── */
 async function renderArticle(id) {
   const a = (INDEX.articles || []).find(x => x.id === id);
   const wrap = el('div', 'reader');
@@ -226,17 +263,39 @@ async function renderArticle(id) {
   back.href = '#/c/' + a.ch;
   bar.append(back, el('span', null, c.emoji + ' ' + c.label));
   if (a.d) bar.append(el('span', 'dot'), el('span', null, a.d));
-  const grow = el('div', 'grow');
+
+  const frame = el('iframe');
+  frame.id = 'frame';
+  // srcdoc iframe 은 부모와 같은 오리진이라, 저장본에 script 가 남아 있으면 뷰어 권한으로 돈다.
+  // allow-scripts 를 주지 않아 실행을 막고, allow-same-origin 은 남겨 본문 높이를 읽는다.
+  frame.setAttribute('sandbox', 'allow-same-origin allow-popups allow-popups-to-escape-sandbox');
+
+  // 글자 크기 — 저장본 문서의 --fs 만 바꾼다. 원문의 크기 위계는 비율로 따라온다.
+  const bump = d => () => {
+    const doc = frame.contentDocument;
+    const cur = getFs()
+      || parseInt(getComputedStyle(doc.documentElement).getPropertyValue('--fs'), 10)
+      || 16;
+    localStorage.setItem(FSKEY, String(clamp(cur + d, FS_MIN, FS_MAX)));
+    applyFs(doc);
+  };
+  const smaller = el('button', 'fs', 'A−');
+  const bigger  = el('button', 'fs', 'A＋');
+  smaller.title = '글자 작게';
+  bigger.title  = '글자 크게';
+  smaller.onclick = bump(-1);
+  bigger.onclick  = bump(+1);
+
   const src = el('a', null, '원문 ↗');
   src.href = a.src;
   src.target = '_blank';
   src.rel = 'noopener';
-  grow.append(src);
+
+  const grow = el('div', 'grow');
+  grow.append(smaller, bigger, src);
   bar.append(grow);
 
   const prog = el('div', 'prog');
-  const frame = el('iframe');
-  frame.id = 'frame';
   wrap.append(bar, prog, frame);
 
   const html = await ghRaw(a.p + '/index.html');
@@ -255,8 +314,17 @@ async function renderArticle(id) {
   frame.onload = () => {
     const d = frame.contentDocument;
     const fit = () => { frame.style.height = d.documentElement.scrollHeight + 'px'; };
+    applyFs(d);
     fit();
     new ResizeObserver(fit).observe(d.body);
+    // 본문 이미지를 탭하면 전체화면으로 — 1600px 차트가 폰 폭 345px 로 눌리면 축 라벨을 못 읽는다
+    d.addEventListener('click', e => {
+      const t = e.target;
+      if (t && t.tagName === 'IMG' && (t.src || '').indexOf('blob:') === 0) {
+        e.preventDefault();
+        openZoom(t.src);
+      }
+    });
     fillImages(d, a.p, prog, fit);
   };
   return wrap;
@@ -290,6 +358,118 @@ async function fillImages(d, base, prog, fit) {
   setTimeout(() => prog.remove(), 400);
 }
 
+/* ── 이미지 확대 ─────────────────────────
+ * 차트·표가 이미지로 들어있는 글이라 확대가 본문 글자 크기보다 중요하다.
+ * 두 손가락 확대 / 두 번 탭 / 끌어서 이동. 열릴 때는 화면에 맞춰 놓는다. */
+function openZoom(src) {
+  const lb = el('div', 'lb');
+  const img = el('img');
+  const closeBtn = el('button', 'lb-x', '✕');
+  closeBtn.setAttribute('aria-label', '닫기');
+  const hint = el('div', 'lb-hint', '두 손가락으로 확대 · 두 번 탭하면 원본 크기 · 바깥을 탭하면 닫힘');
+  lb.append(img, closeBtn, hint);
+  document.body.append(lb);
+  document.body.style.overflow = 'hidden';
+
+  let scale = 1, tx = 0, ty = 0, base = 1;
+  const apply = () => {
+    img.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+  };
+
+  const reset = () => {
+    const vw = innerWidth, vh = innerHeight;
+    const iw = img.naturalWidth || vw, ih = img.naturalHeight || vh;
+    base = Math.min(vw / iw, vh / ih, 1);
+    scale = base;
+    tx = (vw - iw * base) / 2;
+    ty = (vh - ih * base) / 2;
+    apply();
+  };
+
+  // 화면 좌표 (px,py) 를 고정한 채 k 배 확대
+  const zoomAt = (k, px, py) => {
+    const ns = clamp(scale * k, base * 0.9, Math.max(base * 8, 8));
+    k = ns / scale;
+    tx = px - k * (px - tx);
+    ty = py - k * (py - ty);
+    scale = ns;
+    apply();
+  };
+
+  img.onload = reset;
+  img.src = src;
+  addEventListener('resize', reset);
+
+  const pts = new Map();
+  let startPinch = null, lastPan = null, lastTap = 0;
+  const mid = () => {
+    const v = [];
+    pts.forEach(p => v.push(p));
+    return { x: (v[0].x + v[1].x) / 2, y: (v[0].y + v[1].y) / 2,
+             d: Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y) };
+  };
+
+  lb.addEventListener('pointerdown', e => {
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2) { startPinch = { d: mid().d, s: scale }; lastPan = null; }
+    else { lastPan = { x: e.clientX, y: e.clientY, moved: false }; }
+  });
+
+  lb.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size >= 2 && startPinch) {
+      const m = mid();
+      if (m.d > 0) zoomAt((startPinch.s * (m.d / startPinch.d)) / scale, m.x, m.y);
+    } else if (pts.size === 1 && lastPan) {
+      const dx = e.clientX - lastPan.x, dy = e.clientY - lastPan.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) lastPan.moved = true;
+      tx += dx; ty += dy;
+      lastPan.x = e.clientX; lastPan.y = e.clientY;
+      apply();
+    }
+  });
+
+  const up = e => {
+    const wasTap = lastPan && !lastPan.moved;
+    const onBackdrop = e.target === lb;
+    pts.delete(e.pointerId);
+    if (pts.size < 2) startPinch = null;
+    if (pts.size === 0 && wasTap) {
+      const now = Date.now();
+      if (now - lastTap < 300) {              // 두 번 탭 → 원본 크기 ↔ 화면 맞춤
+        lastTap = 0;
+        if (scale > base * 1.05) reset();
+        else zoomAt(1 / base, e.clientX, e.clientY);
+      } else {
+        lastTap = now;
+        // 한 번 탭이 확정될 때까지 기다렸다가, 이미지 바깥이었으면 닫는다
+        setTimeout(() => {
+          if (lastTap && Date.now() - lastTap >= 280 && onBackdrop) close();
+        }, 300);
+      }
+    }
+    lastPan = null;
+  };
+  lb.addEventListener('pointerup', up);
+  lb.addEventListener('pointercancel', up);
+  lb.addEventListener('wheel', e => {
+    e.preventDefault();
+    zoomAt(e.deltaY < 0 ? 1.18 : 1 / 1.18, e.clientX, e.clientY);
+  }, { passive: false });
+
+  function close() {
+    removeEventListener('resize', reset);
+    removeEventListener('keydown', onKey);
+    lb.remove();
+    document.body.style.overflow = '';
+  }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+  addEventListener('keydown', onKey);
+  closeBtn.onclick = close;
+  setTimeout(() => hint.classList.add('gone'), 2600);
+}
+
 /* ── 라우터 ─────────────────────────────── */
 function navbar(active) {
   const nav = $('#nav');
@@ -317,6 +497,7 @@ async function route() {
     else                          node = renderHome();
     view.textContent = '';
     view.append(node);
+    $('.top').classList.remove('hide');
     if (kind !== 'a') scrollTo(0, 0);
     const cur = kind === 'a' ? (INDEX.articles || []).find(x => x.id === arg) : null;
     document.title = (cur && cur.t) ? cur.t : 'Premium Contents';
@@ -326,6 +507,16 @@ async function route() {
     view.append(el('div', 'empty', '문제가 생겼습니다 — ' + e.message));
   }
 }
+
+/* 스크롤을 내리면 상단바를 접는다 — 폰에서 세로 52px 는 시황글 두 줄 값이다 */
+let lastY = 0;
+addEventListener('scroll', () => {
+  const y = scrollY, top = $('.top');
+  if (!top || top.hidden) return;
+  if (y > 140 && y > lastY + 6) top.classList.add('hide');
+  else if (y < lastY - 6 || y < 90) top.classList.remove('hide');
+  lastY = y;
+}, { passive: true });
 
 /* ── 토큰 창 ─────────────────────────────── */
 function openGate(msg) {
