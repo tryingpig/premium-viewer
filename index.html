@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Premium Contents</title>
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>📚</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top" hidden>
+  <a class="brand" href="#/">📚 <b>Premium</b> Contents</a>
+  <nav class="chs" id="nav"></nav>
+  <button class="icon" id="btn-settings" title="설정" aria-label="설정">⚙</button>
+</header>
+
+<main id="view"><div class="boot">불러오는 중…</div></main>
+
+<dialog id="gate">
+  <form method="dialog" id="gate-form">
+    <h2>🔑 접근 토큰</h2>
+    <p class="hint">
+      본문은 비공개 저장소 <code>tryingpig/premium-contents</code> 에 있습니다.
+      읽기 권한이 있는 GitHub 토큰을 넣으면 이 브라우저에만 저장됩니다(localStorage).
+    </p>
+    <input id="gate-input" type="password" placeholder="github_pat_… 또는 ghp_…" autocomplete="off" spellcheck="false">
+    <p class="err" id="gate-err" hidden></p>
+    <div class="row">
+      <button value="cancel" class="ghost" id="gate-cancel" type="button">닫기</button>
+      <button value="ok" class="primary" id="gate-ok">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
