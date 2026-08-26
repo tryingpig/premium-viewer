@@ -48,7 +48,14 @@ async function ghRaw(path, asBlob) {
   const r = await fetch(url, {
     headers: { Authorization: 'Bearer ' + pat, Accept: 'application/vnd.github.raw' } });
   if (r.status === 401 || r.status === 403) throw new AuthError('토큰이 거부되었습니다 (' + r.status + ')');
-  if (r.status === 404) throw new Error('없는 파일: ' + path);
+  // 비공개 repo 는 권한이 없으면 403 이 아니라 404 로 답한다(저장소 존재 자체를 숨긴다).
+  // 그래서 색인조차 404 면 '파일이 없다'가 아니라 '토큰이 이 저장소를 못 본다'로 읽어야 한다.
+  if (r.status === 404) {
+    if (path === 'index.json')
+      throw new AuthError('이 토큰으로는 premium-contents 가 보이지 않습니다. '
+        + '토큰의 Repository access 가 premium-contents 를 포함하는지 확인해 주세요.');
+    throw new Error('저장소에 없는 파일: ' + path);
+  }
   if (!r.ok) throw new Error('읽기 실패 ' + r.status);
   return asBlob ? r.blob() : r.text();
 }
