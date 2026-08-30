@@ -73,11 +73,89 @@ async function ghRaw(path, asBlob) {
   return asBlob ? r.blob() : r.text();
 }
 
-async function blobUrl(path) {
-  if (BLOBS.has(path)) return BLOBS.get(path);
-  const u = URL.createObjectURL(await ghRaw(path, true));
-  BLOBS.set(path, u);
+/* ── 브라우저 캐시 ─────────────────────────
+ * 글 하나에 이미지가 40~70장이라 매번 GitHub API 를 60번 때리면 열 때마다 느리다.
+ * 받은 것은 Cache Storage 에 남겨 두 번째부터는 네트워크를 아예 안 탄다.
+ * 키에 색인의 saved(재보존 시각)를 넣어 두므로, 글을 다시 보존하면 키가 달라져
+ * 저절로 새로 받는다 — 낡은 저장본이 캐시에 눌러앉는 일이 없다. */
+const CACHE_NAME = 'pc-v1';
+let CACHE;                          // Cache | false(못 씀) | undefined(아직 안 열어봄)
+let PRUNED = false;
+
+async function store() {
+  if (CACHE !== undefined) return CACHE;
+  try { CACHE = self.caches ? await caches.open(CACHE_NAME) : false; }
+  catch (e) { CACHE = false; }      // 사파리 시크릿창 등
+  return CACHE;
+}
+// 실제로 요청하지 않는 합성 키다. 같은 오리진이어야 Cache 에 넣을 수 있다.
+const ckey = (path, ver) => location.origin + '/__pc/' + path + '?v=' + encodeURIComponent(ver || '0');
+
+/** 저장본 파일 하나를 캐시 우선으로 읽는다. asBlob 이면 Blob, 아니면 text. */
+async function cachedFetch(path, ver, asBlob) {
+  const c = await store();
+  const key = ckey(path, ver);
+  if (c) {
+    try {
+      const hit = await c.match(key);
+      if (hit) return asBlob ? await hit.blob() : await hit.text();
+    } catch (e) { /* 캐시가 깨졌으면 그냥 받는다 */ }
+  }
+  const data = await ghRaw(path, asBlob);
+  // 넣는 것은 기다리지 않는다 — 화면이 캐시 쓰기를 기다릴 이유가 없다
+  if (c) { try { c.put(key, new Response(data)).catch(() => {}); } catch (e) {} }
+  return data;
+}
+
+/** 캐시에만 채워 넣는다(미리받기용). objectURL 을 만들지 않아 메모리를 안 쓴다. */
+const warm = (path, ver) => cachedFetch(path, ver, true).then(() => true, () => false);
+
+async function blobUrl(path, ver) {
+  const k = path + '@' + (ver || '');
+  if (BLOBS.has(k)) return BLOBS.get(k);
+  const u = URL.createObjectURL(await cachedFetch(path, ver, true));
+  BLOBS.set(k, u);
   return u;
+}
+
+/* ── 미리받기 ─────────────────────────────
+ * 목록을 열면 최신 글 하나를 뒤에서 캐시에 채워 둔다. 목록 → 글로 들어갈 때
+ * 기다림이 사라진다. 데이터 절약 모드면 하지 않는다. */
+let PREFETCHED = '';
+function schedulePrefetch(a) {
+  if (!a || a.gone || PREFETCHED === a.id) return;
+  if ((navigator.connection || {}).saveData) return;
+  PREFETCHED = a.id;
+  setTimeout(() => prefetch(a).catch(() => {}), 1200);
+}
+async function prefetch(a) {
+  const html = await cachedFetch(a.p + '/index.html', a.saved);
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const paths = [].filter.call(doc.querySelectorAll('img'),
+                               i => (i.getAttribute('src') || '').indexOf('img/') === 0)
+                  .map(i => a.p + '/' + i.getAttribute('src'));
+  let i = 0;
+  const worker = async () => { while (i < paths.length) await warm(paths[i++], a.saved); };
+  await Promise.all([worker(), worker(), worker()]);   // 읽는 중이 아니므로 얌전히
+}
+
+/** 색인에 없는(삭제됐거나 다시 보존된) 캐시를 지운다. 세션당 한 번, 뒤에서. */
+async function pruneStore() {
+  const c = await store();
+  if (!c) return;
+  const ok = new Set();
+  (INDEX.articles || []).forEach(a => { if (!a.gone) ok.add(a.p + '@' + (a.saved || '')); });
+  const keys = await c.keys();
+  for (const req of keys) {
+    let dir, ver;
+    try {
+      const u = new URL(req.url);
+      dir = decodeURIComponent(u.pathname.split('/__pc/')[1] || '')
+              .replace(/\/(img\/[^/]+|thumb\.webp|index\.html)$/, '');
+      ver = u.searchParams.get('v') || '';
+    } catch (e) { continue; }
+    if (!dir || !ok.has(dir + '@' + ver)) await c.delete(req);
+  }
 }
 
 /* ── 색인 ───────────────────────────────── */
@@ -85,6 +163,7 @@ async function loadIndex(force) {
   if (INDEX && !force) return INDEX;
   INDEX = JSON.parse(await ghRaw('index.json'));
   (INDEX.channels || []).forEach((c, i) => { ACOF[c.id] = ACCENTS[i % ACCENTS.length]; });
+  if (!PRUNED) { PRUNED = true; setTimeout(() => pruneStore().catch(() => {}), 4000); }
   return INDEX;
 }
 const chOf = id => (INDEX.channels || []).find(c => c.id === id) || { label: id, emoji: '📰' };
@@ -95,7 +174,7 @@ function thumb(a) {
   const img = el('img', 'th');
   img.loading = 'lazy';
   img.alt = '';
-  blobUrl(a.p + '/thumb.webp').then(u => { img.src = u; })
+  blobUrl(a.p + '/thumb.webp', a.saved).then(u => { img.src = u; })
     .catch(() => { img.replaceWith(el('div', 'th ph', '📄')); });
   return img;
 }
@@ -156,7 +235,9 @@ function renderHome() {
   w.append(el('h2', 'sec', '최근 글'));
   const box = el('div', 'list');
   w.append(box);
-  listInto(box, (INDEX.articles || []).filter(live), true);
+  const recent = (INDEX.articles || []).filter(live);
+  listInto(box, recent, true);
+  schedulePrefetch(recent[0]);
   return w;
 }
 
@@ -209,6 +290,7 @@ function renderChannel(id) {
   let t;
   search.oninput = () => { clearTimeout(t); t = setTimeout(apply, 180); };
   apply();
+  schedulePrefetch(all[0]);
   return w;
 }
 
@@ -335,7 +417,7 @@ async function renderArticle(id) {
   }
   wrap.append(frame);
 
-  const html = await ghRaw(a.p + '/index.html');
+  const html = await cachedFetch(a.p + '/index.html', a.saved);
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
   // 이미지는 나중에 채운다 — 58장짜리 글도 글자는 즉시 보이게 한다
@@ -362,13 +444,14 @@ async function renderArticle(id) {
         openZoom(t.src);
       }
     });
-    fillImages(d, a.p, prog, fit);
+    fillImages(d, a.p, a.saved, prog, fit);
   };
   return wrap;
 }
 
-/** 이미지를 동시 6장씩 받아 채운다. GitHub API 는 시간당 5,000회라 한 글에 60장이어도 넉넉하다. */
-async function fillImages(d, base, prog, fit) {
+/** 이미지를 동시 12장씩 받아 채운다. GitHub API 는 시간당 5,000회라 한 글에 70장이어도 넉넉하다.
+ *  캐시에 있으면 네트워크를 안 타므로 두 번째부터는 이 루프가 거의 즉시 끝난다. */
+async function fillImages(d, base, ver, prog, fit) {
   const queue = [].slice.call(d.querySelectorAll('img[data-pc]'));
   const total = queue.length;
   if (!total) { prog.remove(); return; }
@@ -377,7 +460,7 @@ async function fillImages(d, base, prog, fit) {
     const t = queue.shift();
     if (!t) return;
     try {
-      t.src = await blobUrl(base + '/' + t.dataset.pc);
+      t.src = await blobUrl(base + '/' + t.dataset.pc, ver);
       t.removeAttribute('data-pc');
     } catch (e) {
       const ph = d.createElement('div');
@@ -390,20 +473,24 @@ async function fillImages(d, base, prog, fit) {
     if (done % 4 === 0) fit();
     return next();
   }
-  await Promise.all(Array.from({ length: 6 }, next));
+  await Promise.all(Array.from({ length: 12 }, next));
   fit();
   setTimeout(() => prog.remove(), 400);
 }
 
 /* ── 이미지 확대 ─────────────────────────
  * 차트·표가 이미지로 들어있는 글이라 확대가 본문 글자 크기보다 중요하다.
- * 두 손가락 확대 / 두 번 탭 / 끌어서 이동. 열릴 때는 화면에 맞춰 놓는다. */
+ * 열 때 '화면에 맞춤'으로 놓으면 본문에서 보던 크기 그대로라 탭 한 번이 헛돈다
+ * (폰에서 752px 차트는 화면폭 362px 기준 0.48배 = 본문과 동일).
+ * 그래서 열자마자 원본 픽셀(1:1)로 놓는다. 원본 자체가 590~750px 라 그 위로
+ * 키워봐야 글씨가 뭉개질 뿐이므로, 기본은 여기까지다.
+ * 두 손가락 확대 / 두 번 탭(전체↔원본) / 끌어서 이동. */
 function openZoom(src) {
   const lb = el('div', 'lb');
   const img = el('img');
   const closeBtn = el('button', 'lb-x', '✕');
   closeBtn.setAttribute('aria-label', '닫기');
-  const hint = el('div', 'lb-hint', '두 손가락으로 확대 · 두 번 탭하면 원본 크기 · 바깥을 탭하면 닫힘');
+  const hint = el('div', 'lb-hint', '두 번 탭하면 전체 보기 · 두 손가락으로 더 확대 · 바깥을 탭하면 닫힘');
   lb.append(img, closeBtn, hint);
   document.body.append(lb);
   document.body.style.overflow = 'hidden';
@@ -413,14 +500,21 @@ function openZoom(src) {
     img.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
   };
 
+  // 배율 하나를 정해 놓는다. 화면보다 크면 왼쪽 위부터 — 차트는 y축 라벨이 왼쪽에 있다.
+  const place = s => {
+    const vw = innerWidth, vh = innerHeight;
+    const iw = img.naturalWidth || vw, ih = img.naturalHeight || vh;
+    scale = s;
+    tx = iw * s > vw ? 0 : (vw - iw * s) / 2;
+    ty = ih * s > vh ? 0 : (vh - ih * s) / 2;
+    apply();
+  };
+
   const reset = () => {
     const vw = innerWidth, vh = innerHeight;
     const iw = img.naturalWidth || vw, ih = img.naturalHeight || vh;
-    base = Math.min(vw / iw, vh / ih, 1);
-    scale = base;
-    tx = (vw - iw * base) / 2;
-    ty = (vh - ih * base) / 2;
-    apply();
+    base = Math.min(vw / iw, vh / ih, 1);   // 전체가 들어오는 배율 = 축소의 하한
+    place(1);                               // 원본 1:1 로 시작
   };
 
   // 화면 좌표 (px,py) 를 고정한 채 k 배 확대
@@ -476,8 +570,8 @@ function openZoom(src) {
       const now = Date.now();
       if (now - lastTap < 300) {              // 두 번 탭 → 원본 크기 ↔ 화면 맞춤
         lastTap = 0;
-        if (scale > base * 1.05) reset();
-        else zoomAt(1 / base, e.clientX, e.clientY);
+        if (scale > base * 1.05) place(base);   // 전체 보기
+        else place(1);                          // 원본 1:1
       } else {
         lastTap = now;
         // 한 번 탭이 확정될 때까지 기다렸다가, 이미지 바깥이었으면 닫는다
