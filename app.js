@@ -110,6 +110,36 @@ async function cachedFetch(path, ver, asBlob) {
 /** 캐시에만 채워 넣는다(미리받기용). objectURL 을 만들지 않아 메모리를 안 쓴다. */
 const warm = (path, ver) => cachedFetch(path, ver, true).then(() => true, () => false);
 
+/* ── 썸네일 받기: 동시 4개까지, 15초 넘으면 포기 ─────────
+ * private repo 라 썸네일 한 장이 곧 GitHub API 호출 하나다. 목록을 열면 30장이 한꺼번에
+ * 나가는데, 그러면 GitHub 이 동시 요청을 눌러 응답이 늦어지고 img 는 src 없이 빈 칸으로
+ * 남는다(실패도 아니라 자리표시조차 안 뜬다 — 폰에서 실제로 그렇게 보였다).
+ * 그래서 ① 동시 4개로 줄이고 ② 15초에 끊어 실패로 확정한다. 끊긴 건 다음 스크롤·재방문에
+ * 다시 시도한다. 캐시(Cache Storage)에 이미 있는 건 큐를 타지 않고 바로 나간다. */
+const GATE_MAX = 4;
+let gateRunning = 0;
+const gateQ = [];
+
+function gate(fn) {
+  return new Promise((res, rej) => {
+    gateQ.push(() => fn().then(res, rej).finally(() => {
+      gateRunning--;
+      pump();
+    }));
+    pump();
+  });
+}
+function pump() {
+  while (gateRunning < GATE_MAX && gateQ.length) {
+    gateRunning++;
+    gateQ.shift()();
+  }
+}
+const withTimeout = (p, ms) => new Promise((res, rej) => {
+  const t = setTimeout(() => rej(new Error('시간 초과')), ms);
+  p.then(res, rej).finally(() => clearTimeout(t));
+});
+
 async function blobUrl(path, ver) {
   const k = path + '@' + (ver || '');
   if (BLOBS.has(k)) return BLOBS.get(k);
@@ -174,8 +204,27 @@ function thumb(a) {
   const img = el('img', 'th');
   img.loading = 'lazy';
   img.alt = '';
-  blobUrl(a.p + '/thumb.webp', a.saved).then(u => { img.src = u; })
-    .catch(() => { img.replaceWith(el('div', 'th ph', '📄')); });
+  // 화면(±300px)에 들어온 카드만 받는다 — 30장을 미리 다 받을 이유가 없다
+  let asked = false;
+  const load = () => {
+    if (asked) return;
+    asked = true;
+    gate(() => withTimeout(blobUrl(a.p + '/thumb.webp', a.saved), 15000))
+      .then(u => { img.src = u; })
+      .catch(() => {
+        // 끊긴 것은 다음에 다시 볼 때 한 번 더 시도한다(자리표시로 굳히지 않는다)
+        asked = false;
+        img.classList.add('th-fail');
+      });
+  };
+  if (typeof IntersectionObserver === 'function') {
+    const io = new IntersectionObserver(e => {
+      if (e[0].isIntersecting) { load(); if (img.src) io.disconnect(); }
+    }, { rootMargin: '300px' });
+    io.observe(img);
+  } else {
+    load();
+  }
   return img;
 }
 
