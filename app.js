@@ -21,6 +21,41 @@ const el = (t, c, x) => { const n = document.createElement(t); if (c) n.classNam
                           if (x != null) n.textContent = x; return n; };
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
+/* ── 테마 ───────────────────────────────────
+   3단: 시스템 → 라이트 → 다크. '시스템'을 없애고 둘만 두면, OS 를 밤에 자동으로
+   어둡게 바꾸는 사람에게는 뷰어만 계속 밝은 채로 남는다. 초기 적용은 index.html
+   head 에서 이미 끝났고(깜빡임 방지), 여기서는 버튼 표시와 전환만 맡는다. */
+const THEMES = ['system', 'light', 'dark'];
+const THEME_UI = { system: ['🌗', '테마: 시스템'], light: ['☀️', '테마: 밝게'], dark: ['🌙', '테마: 어둡게'] };
+const getTheme = () => { try { return localStorage.getItem('pv-theme') || 'system'; } catch (e) { return 'system'; } };
+
+function applyTheme(t) {
+  if (t === 'system') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  try { t === 'system' ? localStorage.removeItem('pv-theme') : localStorage.setItem('pv-theme', t); } catch (e) {}
+  const b = $('#btn-theme');
+  if (b) { b.textContent = THEME_UI[t][0]; b.title = THEME_UI[t][1]; b.setAttribute('aria-label', THEME_UI[t][1]); }
+}
+
+/* ── 채널 아이콘 ─────────────────────────────
+   각 매체가 실제로 쓰는 로고(브라우저 탭에 뜨는 그 아이콘)를 icons/ 에 받아 두고 쓴다.
+   이모지는 매체를 가리키지 못해서(🎓 가 이효석아카데미라는 단서가 되지 않는다)
+   목록이 길어지면 다 비슷해 보인다. 파일이 없으면 원래 이모지로 되돌아간다. */
+function chIcon(c, cls) {
+  const wrap = el('span', 'chi' + (cls ? ' ' + cls : ''));
+  const img = document.createElement('img');
+  img.src = 'icons/' + c.id + '.png';
+  img.alt = '';
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  img.addEventListener('error', () => {
+    wrap.textContent = c.emoji || '📰';
+    wrap.classList.add('emoji');
+  }, { once: true });
+  wrap.append(img);
+  return wrap;
+}
+
 // 보관 정리: 발행 30일 뒤 '삭제 예정'(exp = 삭제일), 거기서 14일 뒤 실제 삭제(gone).
 // 삭제된 글은 목록에서 빼지만 색인에는 자리표시로 남겨, 텔레그램에 나간 옛 링크가
 // '없는 글'로 끝나지 않고 원문으로 이어지게 한다.
@@ -237,7 +272,11 @@ function row(a, showCh) {
   const bd = el('div', 'bd');
   bd.append(el('div', 'tt', a.t || '(제목 없음)'));
   const mt = el('div', 'mt');
-  if (showCh) mt.append(el('span', 'pill ch', c.emoji + ' ' + c.label));
+  if (showCh) {
+    const pill = el('span', 'pill ch');
+    pill.append(chIcon(c, 'xs'), el('span', null, c.label));
+    mt.append(pill);
+  }
   if (a.c) mt.append(el('span', 'pill', a.c));
   if (a.d) mt.append(el('span', null, a.d));
   if (a.img) mt.append(el('span', 'dot'), el('span', null, '이미지 ' + a.img));
@@ -276,7 +315,7 @@ function renderHome() {
     const a = el('a', 'card');
     a.href = '#/c/' + c.id;
     a.style.setProperty('--ac', ACOF[c.id]);
-    a.append(el('div', 'em', c.emoji), el('div', 'nm', c.label),
+    a.append(chIcon(c, 'em'), el('div', 'nm', c.label),
              el('div', 'ct', (c.count || 0).toLocaleString() + '편 보관'), el('div', 'bar'));
     cards.append(a);
   });
@@ -296,7 +335,9 @@ function renderChannel(id) {
   const all = (INDEX.articles || []).filter(a => a.ch === id && live(a));
   const w = el('div', 'wrap');
   w.style.setProperty('--ac', ACOF[id] || 'var(--accent)');
-  w.append(el('h2', 'sec', c.emoji + ' ' + c.label + ' · ' + all.length.toLocaleString() + '편'));
+  const head = el('h2', 'sec');
+  head.append(chIcon(c, 'sm'), el('span', null, c.label + ' · ' + all.length.toLocaleString() + '편'));
+  w.append(head);
 
   const filters = el('div', 'filters');
   const search = el('input', 'search');
@@ -342,6 +383,79 @@ function renderChannel(id) {
   schedulePrefetch(all[0]);
   return w;
 }
+
+/* ── 다크에서의 본문 ───────────────────────
+ * 저장본은 --paper 를 항상 #fff 로 굳혀 놨다(종이처럼 보이라고). 그대로 두면 어두운
+ * 화면에서 본문만 백지처럼 빛나 밤에 읽을 수가 없다. 그래서 종이를 어둡게 덮는데,
+ * 원문에는 색을 직접 박아 넣은 글자가 많다(표본 10편에 어두운 글자 276개). 배경만
+ * 어둡게 하면 그것들이 통째로 사라지므로, 색조(hue)는 두고 밝기만 끌어올린다.
+ * 빨강 강조는 빨강으로 남아야 글쓴이의 의도가 지켜진다. */
+const isDark = () => {
+  const t = getTheme();
+  return t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme:dark)').matches);
+};
+
+function parseColor(v) {
+  v = (v || '').trim();
+  let m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(v);
+  if (m) {
+    let h = m[1];
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  }
+  m = /^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(v);
+  return m ? [+m[1], +m[2], +m[3]] : null;
+}
+const lumOf = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+/** 색조·채도는 두고 밝기만 목표치로 끌어올린 hex 를 돌려준다. */
+function lighten([r, g, b], target) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  if (mx - mn < 18) return null;                 // 회색·검정 계열은 색이랄 게 없다 → 기본 글자색에 맡긴다
+  const cur = lumOf([r, g, b]) || 1;
+  const k = target / cur;
+  const f = v => Math.round(Math.min(255, Math.max(0, v * k)));
+  const hex = n => n.toString(16).padStart(2, '0');
+  return '#' + hex(f(r)) + hex(f(g)) + hex(f(b));
+}
+
+/** 저장본 문서를 어두운 종이에 맞게 손본다. srcdoc 에 넣기 전에 부른다. */
+function darkenDoc(doc) {
+  doc.querySelectorAll('[style]').forEach(e => {
+    let st = e.getAttribute('style');
+    if (!st) return;
+    st = st.replace(/(^|;)\s*background-color:\s*([^;]+)/gi, (all, sep, val) => {
+      const c = parseColor(val);
+      // 흰 판때기는 걷어낸다. 브랜드색 셀(파란 공지표 등)은 흰 글자를 얹어 쓰므로 그대로 둔다.
+      return (c && lumOf(c) > 225) ? sep : all;
+    });
+    st = st.replace(/(^|;)\s*color:\s*([^;]+)/gi, (all, sep, val) => {
+      const c = parseColor(val);
+      if (!c || lumOf(c) >= 128) return all;      // 이미 밝은 글자(색 셀 위의 흰 글씨 등)
+      const nu = lighten(c, 168);
+      return nu ? sep + 'color:' + nu : sep;      // 무채색이면 아예 지워 기본 글자색을 따르게
+    });
+    e.setAttribute('style', st);
+  });
+}
+
+const DARK_FRAME_CSS = [
+  '.paper{background:#17171a!important;color:#e4e4e7!important;box-shadow:none;' +
+    'border:1px solid #28282e}',
+  '.paper .meta{color:#8b8b93!important;border-bottom-color:#28282e!important}',
+  '.paper h1{color:#f4f4f5!important}',
+  'a{color:#7aa2f7!important}',
+  '.se-cell{border-color:#3a3a42!important}',
+  '.se-horizontalLine hr,hr.se-hr{border-top-color:#28282e!important}',
+  '.se-quotation-container{border-left-color:#3f3f46!important}',
+  '.se-l-quotation_line .se-quotation-container{border-top-color:#52525b!important;' +
+    'border-bottom-color:#52525b!important}',
+  '.se-caption,.se-module-caption{color:#8b8b93!important}',
+  '.snapshot-missing,.snapshot-video{border-color:#3a3a42!important;color:#71717a!important}',
+  // 차트 이미지는 흰 배경이 많다. 어둡게 깔면 글자가 뭉개지므로 밝기만 살짝 낮춰
+  // 눈부심을 줄인다. 탭해서 크게 볼 때는 원래 밝기로 되돌린다.
+  '.paper img{filter:brightness(.92)}',
+].join('');
 
 /* ── 저장본에 덧입히는 CSS ─────────────────
  * 뷰어 안에서는 저장본 자체의 상단 바를 숨기고 종이를 화면에 꽉 채운다.
@@ -406,7 +520,8 @@ async function renderArticle(id) {
     const g = el('div', 'tomb');
     g.append(el('div', 'tomb-em', '🗑'),
              el('h2', null, a.t || '(제목 없음)'),
-             el('p', null, c.emoji + ' ' + c.label + (a.d ? ' · ' + a.d : '')),
+             (() => { const q = el('p'); q.append(chIcon(c, 'xs'),
+                 el('span', null, c.label + (a.d ? ' · ' + a.d : ''))); return q; })(),
              el('p', 'dimmed', (a.del || '') + ' 에 보관 기간이 끝나 저장본을 삭제했습니다.'));
     if (a.src) {
       const go = el('a', 'tomb-go', '네이버 원문으로 ↗');
@@ -422,7 +537,9 @@ async function renderArticle(id) {
   const bar = el('div', 'rbar');
   const back = el('a', 'back', '← 목록');
   back.href = '#/c/' + a.ch;
-  bar.append(back, el('span', null, c.emoji + ' ' + c.label));
+  const who = el('span', 'who');
+  who.append(chIcon(c, 'xs'), el('span', null, c.label));
+  bar.append(back, who);
   if (a.d) bar.append(el('span', 'dot'), el('span', null, a.d));
 
   const frame = el('iframe');
@@ -474,8 +591,9 @@ async function renderArticle(id) {
                               i => (i.getAttribute('src') || '').indexOf('img/') === 0);
   imgs.forEach(i => { i.dataset.pc = i.getAttribute('src'); i.removeAttribute('src'); });
   const st = doc.createElement('style');
-  st.textContent = FRAME_CSS;
+  st.textContent = FRAME_CSS + (isDark() ? DARK_FRAME_CSS : '');
   doc.head.append(st);
+  if (isDark()) darkenDoc(doc);
   doc.querySelectorAll('a[href^="http"]').forEach(x => { x.target = '_blank'; x.rel = 'noopener'; });
 
   frame.srcdoc = '<!doctype html>' + doc.documentElement.outerHTML;
@@ -655,7 +773,8 @@ function navbar(active) {
   const nav = $('#nav');
   nav.textContent = '';
   (INDEX.channels || []).forEach(c => {
-    const a = el('a', c.id === active ? 'on' : '', c.emoji + ' ' + c.label);
+    const a = el('a', c.id === active ? 'on' : '');
+    a.append(chIcon(c, 'xs'), el('span', null, c.label));
     a.href = '#/c/' + c.id;
     nav.append(a);
   });
@@ -728,6 +847,19 @@ $('#gate-ok').addEventListener('click', async e => {
 });
 $('#gate-cancel').addEventListener('click', () => $('#gate').close());
 $('#btn-settings').addEventListener('click', () => openGate(''));
+
+applyTheme(getTheme());
+$('#btn-theme').addEventListener('click', () => {
+  const was = isDark();
+  applyTheme(THEMES[(THEMES.indexOf(getTheme()) + 1) % THEMES.length]);
+  // 본문은 iframe 안에 이미 구워진 상태라 CSS 변수로는 안 바뀐다. 밝기가 실제로
+  // 뒤집혔을 때만 다시 그린다(캐시에서 읽으므로 네트워크는 타지 않는다).
+  if (isDark() !== was) route();
+});
+// 시스템 설정을 따르는 중이면, OS 가 밤에 어두워질 때 읽던 글도 같이 따라가야 한다
+matchMedia('(prefers-color-scheme:dark)').addEventListener('change', () => {
+  if (getTheme() === 'system') route();
+});
 
 addEventListener('hashchange', route);
 route();

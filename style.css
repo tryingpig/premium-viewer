@@ -32,8 +32,23 @@ a{color:inherit;text-decoration:none}
 .chs a:hover{background:var(--chip);color:var(--ink)}
 .chs a.on{background:var(--chip);color:var(--ink);font-weight:600}
 .icon{border:0;background:none;color:var(--dim);font-size:16px;cursor:pointer;
-  width:32px;height:32px;border-radius:8px}
+  width:32px;height:32px;border-radius:8px;flex:0 0 auto;line-height:1}
 .icon:hover{background:var(--chip);color:var(--ink)}
+
+/* ── 채널 아이콘 ───────────────────────────
+   매체 로고를 그대로 쓴다. 로고는 흰 배경을 전제로 만들어진 게 많아 어두운 화면에서
+   가장자리가 붕 뜬다 — 흰 판을 깔아 배지처럼 감싸면 두 테마에서 다 멀쩡하다. */
+.chi{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+  background:#fff;border-radius:6px;overflow:hidden;line-height:0;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+.chi img{width:100%;height:100%;object-fit:contain;display:block}
+.chi.emoji{background:none;box-shadow:none;line-height:1}
+.chi.xs{width:16px;height:16px;border-radius:4px;font-size:12px}
+.chi.sm{width:20px;height:20px;border-radius:5px;font-size:14px}
+.chi.em{width:34px;height:34px;border-radius:9px;font-size:24px}
+/* 상단바·목록에서 아이콘과 글자를 나란히 */
+.chs a,.pill.ch,.who,h2.sec{display:inline-flex;align-items:center;gap:6px}
+h2.sec{display:flex}
 
 /* ── 레이아웃 ─────────────────────────────── */
 .wrap{max-width:960px;margin:0 auto;padding:24px 16px 80px}
