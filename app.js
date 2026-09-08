@@ -304,7 +304,33 @@ function listInto(box, items, showCh) {
   box.append(sentinel);
   io.observe(sentinel);
   draw();
+  // 뒤로 와서 아래쪽 위치로 돌아갈 때, 그 위치가 화면에 들어올 만큼만 더 그린다
+  box.reveal = y => { while (n < items.length && box.getBoundingClientRect().bottom + scrollY < y + innerHeight) draw(); };
 }
+
+/* ── 목록 위치 기억 ─────────────────────────
+ * 칩·검색어는 해시 뒤(#/c/valley?cat=…&q=…)에 싣는다. 글을 보고 뒤로 오면 브라우저가
+ * 그 해시를 그대로 돌려주니 필터도 저절로 돌아온다. 스크롤 위치는 해시별로 sessionStorage
+ * 에 두고, 목록을 다시 그릴 때 그 자리로 돌린다(탭을 닫으면 같이 사라진다). */
+function parseHash() {
+  const raw = (location.hash || '#/').slice(1);
+  const qi = raw.indexOf('?');
+  const path = qi < 0 ? raw : raw.slice(0, qi);
+  const qs = new URLSearchParams(qi < 0 ? '' : raw.slice(qi + 1));
+  const parts = path.split('/');
+  return { path, kind: parts[1], arg: parts[2], qs };
+}
+/** 필터가 바뀌면 해시만 바꿔 둔다 — 히스토리를 쌓지 않으니 뒤로가기 한 번에 목록을 떠난다. */
+function setFilterHash(path, cat, q) {
+  const qs = new URLSearchParams();
+  if (cat) qs.set('cat', cat);
+  if (q) qs.set('q', q);
+  const s = qs.toString();
+  history.replaceState(null, '', '#' + path + (s ? '?' + s : ''));
+}
+const SCROLL_KEY = 'pv-scroll:';
+const saveScroll = () => { try { sessionStorage.setItem(SCROLL_KEY + parseHash().path, String(scrollY)); } catch (e) {} };
+const savedScroll = path => { try { return parseInt(sessionStorage.getItem(SCROLL_KEY + path) || '0', 10) || 0; } catch (e) { return 0; } };
 
 /* ── 화면: 홈 ───────────────────────────── */
 function renderHome() {
@@ -330,7 +356,8 @@ function renderHome() {
 }
 
 /* ── 화면: 채널 ─────────────────────────── */
-function renderChannel(id) {
+function renderChannel(id, qs) {
+  qs = qs || new URLSearchParams();
   const c = chOf(id);
   const all = (INDEX.articles || []).filter(a => a.ch === id && live(a));
   const w = el('div', 'wrap');
@@ -343,6 +370,7 @@ function renderChannel(id) {
   const search = el('input', 'search');
   search.type = 'search';
   search.placeholder = '제목·카테고리 검색';
+  search.value = qs.get('q') || '';
   filters.append(search);
   w.append(filters);
 
@@ -352,7 +380,8 @@ function renderChannel(id) {
   const cats = Object.keys(count).sort((x, y) => count[y] - count[x]);
 
   const chips = el('div', 'cats');
-  let cur = '';
+  let cur = qs.get('cat') || '';
+  if (cur && !count[cur]) cur = '';          // 해시에 남은 칩이 지금은 없는 카테고리면 전체로
   const mk = (label, val) => {
     const b = el('button', val === cur ? 'on' : '', label);
     b.onclick = () => {
@@ -360,6 +389,7 @@ function renderChannel(id) {
       [].forEach.call(chips.children, x => x.classList.remove('on'));
       b.classList.add('on');
       apply();
+      scrollTo(0, 0);
     };
     return b;
   };
@@ -372,6 +402,7 @@ function renderChannel(id) {
 
   function apply() {
     const q = search.value.trim().toLowerCase();
+    setFilterHash('/c/' + id, cur, search.value.trim());
     listInto(box, all.filter(a =>
       (!cur || a.c === cur) &&
       (!q || (a.t || '').toLowerCase().indexOf(q) >= 0
@@ -783,8 +814,7 @@ function navbar(active) {
 
 async function route() {
   const view = $('#view');
-  const parts = (location.hash || '#/').slice(1).split('/');
-  const kind = parts[1], arg = parts[2];
+  const { path, kind, arg, qs } = parseHash();
   try {
     await loadIndex();
     navbar(kind === 'c' ? arg : null);
@@ -792,12 +822,18 @@ async function route() {
     view.append(el('div', 'boot', '불러오는 중…'));
     let node;
     if (kind === 'a' && arg)      node = await renderArticle(arg);
-    else if (kind === 'c' && arg) node = renderChannel(arg);
+    else if (kind === 'c' && arg) node = renderChannel(arg, qs);
     else                          node = renderHome();
     view.textContent = '';
     view.append(node);
     $('.top').classList.remove('hide');
-    if (kind !== 'a') scrollTo(0, 0);
+    if (kind !== 'a') {
+      // 글에서 뒤로 온 경우 읽던 자리로. 처음 들어온 목록은 저장값이 0 이라 맨 위다.
+      const y = savedScroll(path);
+      const box = node.querySelector('.list');
+      if (y && box && box.reveal) box.reveal(y);
+      scrollTo(0, y);
+    }
     const cur = kind === 'a' ? (INDEX.articles || []).find(x => x.id === arg) : null;
     document.title = (cur && cur.t) ? cur.t : 'Premium Contents';
   } catch (e) {
@@ -861,5 +897,14 @@ matchMedia('(prefers-color-scheme:dark)').addEventListener('change', () => {
   if (getTheme() === 'system') route();
 });
 
+// 목록을 떠나기 직전 위치를 남긴다 — hashchange 는 이미 새 해시라 여기서는 늦다
+addEventListener('click', e => {
+  const a = e.target.closest && e.target.closest('a[href^="#/"]');
+  if (!a) return;
+  if (parseHash().kind !== 'a') saveScroll();
+  // 메뉴·카드로 목록에 '새로' 들어갈 땐 맨 위부터 — 지난번 읽던 자리는 뒤로가기 전용이다
+  const to = a.getAttribute('href').slice(1);
+  if (to.split('/')[1] !== 'a') { try { sessionStorage.removeItem(SCROLL_KEY + to.split('?')[0]); } catch (x) {} }
+}, true);
 addEventListener('hashchange', route);
 route();
