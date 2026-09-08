@@ -27,6 +27,8 @@ SRC = {
     "heisenberg":   ("url", "https://heisenberg.kr/wp-content/uploads/2026/07/cropped-Frame-232-192x192.png"),
     "seekingalpha": ("url", "https://seekingalpha.com/samw/static/images/favicon-192x192.png"),
     "valley":       ("url", "https://valley.town/apple-icon.png?apple-icon.0qthcefrl4818.png"),
+    # Substack 발행물은 apple-touch-icon 이 가장 큰 정사각 로고다(og:image 는 구독 카드 배너라 안 맞다)
+    "semianalysis": ("url", "https://substackcdn.com/image/fetch/$s_!Dypw!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F0f02aaaa-9a11-47db-8aee-d57188ddabf9%2Fapple-touch-icon-1024x1024.png"),
 }
 
 idx = json.load(io.open(r"C:\ClaudeCode\premium-contents\index.json", encoding="utf-8"))
