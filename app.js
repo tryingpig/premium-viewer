@@ -86,7 +86,8 @@ const LOCAL = ['localhost', '127.0.0.1', ''].indexOf(location.hostname) >= 0;
 /* ── private repo 읽기 ───────────────────── */
 async function ghRaw(path, asBlob) {
   if (LOCAL) {
-    const r = await fetch('./' + path);
+    // 색인은 브라우저 캐시를 건너뛴다 — 옆 파일이 바뀌어도 낡은 목록을 붙들고 있었다
+    const r = await fetch('./' + path, path === 'index.json' ? { cache: 'no-cache' } : undefined);
     if (!r.ok) throw new Error('로컬 읽기 실패 ' + r.status + ': ' + path);
     return asBlob ? r.blob() : r.text();
   }
@@ -155,19 +156,23 @@ const GATE_MAX = 4;
 let gateRunning = 0;
 const gateQ = [];
 
-function gate(fn) {
+function gate(fn, still) {
   return new Promise((res, rej) => {
-    gateQ.push(() => fn().then(res, rej).finally(() => {
+    gateQ.push({ still, run: () => Promise.resolve().then(fn).then(res, rej).finally(() => {
       gateRunning--;
       pump();
-    }));
+    }) });
     pump();
   });
 }
 function pump() {
   while (gateRunning < GATE_MAX && gateQ.length) {
+    const job = gateQ.shift();
+    // 탭·칩을 바꿔 목록이 갈아엎어지면 줄 서 있던 옛 목록의 썸네일은 받을 곳이 없다.
+    // 그냥 두면 새 목록의 썸네일이 그 뒤에서 기다린다 — 건너뛴다.
+    if (job.still && !job.still()) continue;
     gateRunning++;
-    gateQ.shift()();
+    job.run();
   }
 }
 const withTimeout = (p, ms) => new Promise((res, rej) => {
@@ -237,19 +242,24 @@ const chOf = id => (INDEX.channels || []).find(c => c.id === id) || { label: id,
 function thumb(a) {
   if (!a.th) return el('div', 'th ph', '📄');
   const img = el('img', 'th');
-  img.loading = 'lazy';
+  // loading=lazy 는 붙이지 않는다 — 아래 IntersectionObserver 가 이미 같은 일을 하고,
+  // 브라우저 자체 lazy 는 '방금 끼워 넣은 목록'을 스크롤이 일어나기 전까지 안 받는 경우가
+  // 있다(사파리). 탭을 바꾸면 썸네일이 빈 칸으로 남고 새로고침해야 나오던 증상.
+  img.decoding = 'async';
   img.alt = '';
   // 화면(±300px)에 들어온 카드만 받는다 — 30장을 미리 다 받을 이유가 없다
-  let asked = false;
+  let asked = false, tries = 0;
+  const alive = () => img.isConnected;
   const load = () => {
-    if (asked) return;
+    if (asked || img.src) return;
     asked = true;
-    gate(() => withTimeout(blobUrl(a.p + '/thumb.webp', a.saved), 15000))
-      .then(u => { img.src = u; })
+    gate(() => withTimeout(blobUrl(a.p + '/thumb.webp', a.saved), 15000), alive)
+      .then(u => { img.src = u; img.classList.remove('th-fail'); })
       .catch(() => {
-        // 끊긴 것은 다음에 다시 볼 때 한 번 더 시도한다(자리표시로 굳히지 않는다)
+        // 끊긴 것은 한 번은 곧바로, 그 뒤엔 다시 화면에 들어올 때 다시 시도한다
         asked = false;
         img.classList.add('th-fail');
+        if (++tries <= 2 && alive()) setTimeout(() => { if (alive()) load(); }, 1500 * tries);
       });
   };
   if (typeof IntersectionObserver === 'function') {
@@ -377,7 +387,12 @@ function renderChannel(id, qs) {
   // 카테고리 칩은 실제 저장된 글에 있는 것만 — config 에만 있고 글이 없는 칩은 안 그린다
   const count = {};
   all.forEach(a => { if (a.c) count[a.c] = (count[a.c] || 0) + 1; });
-  const cats = Object.keys(count).sort((x, y) => count[y] - count[x]);
+  let cats = Object.keys(count).sort((x, y) => count[y] - count[x]);
+  if (c.cats_fixed && c.cats) {
+    // 채널이 순서를 정해 준 경우(밸리 등) — 정한 순서 먼저, 목록에 없는 새 카테고리는 뒤에 많은 순
+    const rank = {}; c.cats.forEach((k, i) => { rank[k] = i; });
+    cats.sort((x, y) => ((x in rank) ? rank[x] : 1e9) - ((y in rank) ? rank[y] : 1e9) || count[y] - count[x]);
+  }
 
   const chips = el('div', 'cats');
   let cur = qs.get('cat') || '';
