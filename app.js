@@ -66,6 +66,53 @@ function daysLeft(a) {
   return Math.max(0, Math.ceil(t / 86400000));
 }
 
+/* ── 읽음 표시 · 읽던 위치 — 이 기기 안에만 ─────────
+ * 어디에도 올리지 않는다(저장소에 쓰면 커밋이 쌓여 Actions 를 흔든다). 그래서 폰과 PC 가
+ * 다르게 보일 수 있다 — 화면에 '이 기기' 라고 적어 둔다.
+ * '새 글' 은 처음 쓴 날 이후에 올라온 글 중 아직 안 연 것. 처음 켰을 때 263편이 전부
+ * 새 글로 뜨면 표시가 무의미해지므로 그날을 기준선으로 삼는다. */
+const SEEN_KEY = 'pv-seen', BASE_KEY = 'pv-seen-base', POS_KEY = 'pv-pos';
+const SEEN = (() => { try { return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || '[]')); } catch (e) { return new Set(); } })();
+const seenBase = () => {
+  try {
+    let b = localStorage.getItem(BASE_KEY);
+    if (!b) { b = new Date().toISOString().slice(0, 10); localStorage.setItem(BASE_KEY, b); }
+    return b;
+  } catch (e) { return '9999'; }
+};
+const isNew = a => !SEEN.has(a.id) && (a.d || '').slice(0, 10) >= seenBase();
+function markSeen(id) {
+  if (SEEN.has(id)) return;
+  SEEN.add(id);
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify([...SEEN].slice(-3000))); } catch (e) {}
+}
+const posAll = () => { try { return JSON.parse(localStorage.getItem(POS_KEY) || '{}'); } catch (e) { return {}; } };
+function savePos(id, y) {
+  const m = posAll();
+  delete m[id];
+  if (y >= 300) m[id] = Math.round(y);       // 첫 화면 안이면 기억할 게 없다
+  const ks = Object.keys(m);
+  ks.slice(0, Math.max(0, ks.length - 200)).forEach(k => delete m[k]);
+  try { localStorage.setItem(POS_KEY, JSON.stringify(m)); } catch (e) {}
+}
+/* 목록에서 어떤 칩을 보다가 글로 들어왔는지 — 글 안의 이전/다음이 그 범위 안에서 움직인다 */
+const setCtx = c => { try { sessionStorage.setItem('pv-ctx', JSON.stringify(c)); } catch (e) {} };
+const getCtx = () => { try { return JSON.parse(sessionStorage.getItem('pv-ctx') || 'null'); } catch (e) { return null; } };
+let NAV_FRESH = false;              // 이전/다음으로 넘어온 글은 맨 위부터
+
+const dayLabel = dk => {
+  if (!dk) return '날짜 없음';
+  const d = new Date(dk + 'T00:00:00'), now = new Date();
+  const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diff = Math.round((t0 - d) / 86400000);
+  const w = '일월화수목금토'[d.getDay()];
+  const md = (d.getMonth() + 1) + '월 ' + d.getDate() + '일 (' + w + ')';
+  if (diff === 0) return '오늘 · ' + md;
+  if (diff === 1) return '어제 · ' + md;
+  return (d.getFullYear() !== now.getFullYear() ? d.getFullYear() + '년 ' : '') + md;
+};
+const soon = a => { const dd = daysLeft(a); return dd !== null && dd <= 7; };
+
 let INDEX = null;                   // index.json
 let ACOF  = {};                     // 채널id → 색
 const BLOBS = new Map();            // repo 경로 → objectURL (세션 캐시)
@@ -277,6 +324,7 @@ function row(a, showCh) {
   const c = chOf(a.ch);
   const link = el('a', 'item');
   link.href = '#/a/' + a.id;
+  if (isNew(a)) link.classList.add('new');
   link.style.setProperty('--ac', ACOF[a.ch] || 'var(--accent)');
   link.append(thumb(a));
   const bd = el('div', 'bd');
@@ -306,8 +354,13 @@ function listInto(box, items, showCh) {
   const sentinel = el('div');
   const io = new IntersectionObserver(e => { if (e[0].isIntersecting) draw(); },
                                       { rootMargin: '600px' });
+  let lastD = null;
   function draw() {
-    items.slice(n, n + PAGE).forEach(a => box.insertBefore(row(a, showCh), sentinel));
+    items.slice(n, n + PAGE).forEach(a => {
+      const dk = (a.d || '').slice(0, 10);
+      if (dk !== lastD) { lastD = dk; box.insertBefore(el('div', 'dsep', dayLabel(dk)), sentinel); }
+      box.insertBefore(row(a, showCh), sentinel);
+    });
     n += PAGE;
     if (n >= items.length) io.disconnect();
   }
@@ -343,7 +396,8 @@ const saveScroll = () => { try { sessionStorage.setItem(SCROLL_KEY + parseHash()
 const savedScroll = path => { try { return parseInt(sessionStorage.getItem(SCROLL_KEY + path) || '0', 10) || 0; } catch (e) { return 0; } };
 
 /* ── 화면: 홈 ───────────────────────────── */
-function renderHome() {
+function renderHome(qs) {
+  qs = qs || new URLSearchParams();
   const w = el('div', 'wrap');
   w.append(el('h2', 'sec', '채널'));
   const cards = el('div', 'cards');
@@ -356,16 +410,48 @@ function renderHome() {
     cards.append(a);
   });
   w.append(cards);
-  w.append(el('h2', 'sec', '최근 글'));
+  const recent = (INDEX.articles || []).filter(live);
+
+  // 전체 채널 검색 — 채널마다 들어가 보지 않아도 '엔비디아' 한 번으로 다 나온다
+  const filters = el('div', 'filters');
+  const search = el('input', 'search');
+  search.type = 'search';
+  search.placeholder = '전체 채널에서 제목·카테고리 검색';
+  search.value = qs.get('q') || '';
+  filters.append(search);
+  w.append(filters);
+
+  const exp = recent.filter(soon);
+  if (exp.length) {
+    w.append(el('h2', 'sec', '🗑 곧 삭제 (7일 안) · ' + exp.length + '편'));
+    const eb = el('div', 'list');
+    w.append(eb);
+    listInto(eb, exp, true);
+  }
+
+  const head = el('h2', 'sec', '최근 글');
+  w.append(head);
   const box = el('div', 'list');
   w.append(box);
-  const recent = (INDEX.articles || []).filter(live);
-  listInto(box, recent, true);
+  function apply() {
+    const q = search.value.trim().toLowerCase();
+    setFilterHash('/', '', search.value.trim());
+    const hit = !q ? recent : recent.filter(a =>
+      (a.t || '').toLowerCase().indexOf(q) >= 0
+      || (a.c || '').toLowerCase().indexOf(q) >= 0
+      || (chOf(a.ch).label || '').toLowerCase().indexOf(q) >= 0);
+    head.textContent = q ? '검색 결과 · ' + hit.length + '편' : '최근 글';
+    listInto(box, hit, true);
+  }
+  let t;
+  search.oninput = () => { clearTimeout(t); t = setTimeout(apply, 180); };
+  apply();
   schedulePrefetch(recent[0]);
   return w;
 }
 
 /* ── 화면: 채널 ─────────────────────────── */
+const EXP_CHIP = '__exp';            // '곧 삭제' 칩의 해시 값 — 실제 카테고리 이름과 안 겹치게
 function renderChannel(id, qs) {
   qs = qs || new URLSearchParams();
   const c = chOf(id);
@@ -395,8 +481,9 @@ function renderChannel(id, qs) {
   }
 
   const chips = el('div', 'cats');
+  const expN = all.filter(soon).length;
   let cur = qs.get('cat') || '';
-  if (cur && !count[cur]) cur = '';          // 해시에 남은 칩이 지금은 없는 카테고리면 전체로
+  if (cur === EXP_CHIP ? !expN : (cur && !count[cur])) cur = '';   // 해시에 남은 칩이 지금은 없으면 전체로
   const mk = (label, val) => {
     const b = el('button', val === cur ? 'on' : '', label);
     b.onclick = () => {
@@ -410,6 +497,7 @@ function renderChannel(id, qs) {
   };
   chips.append(mk('전체 ' + all.length, ''));
   cats.forEach(k => chips.append(mk(k + ' ' + count[k], k)));
+  if (expN) chips.append(mk('🗑 곧 삭제 ' + expN, EXP_CHIP));
   w.append(chips);
 
   const box = el('div', 'list');
@@ -419,7 +507,7 @@ function renderChannel(id, qs) {
     const q = search.value.trim().toLowerCase();
     setFilterHash('/c/' + id, cur, search.value.trim());
     listInto(box, all.filter(a =>
-      (!cur || a.c === cur) &&
+      (cur === EXP_CHIP ? soon(a) : (!cur || a.c === cur)) &&
       (!q || (a.t || '').toLowerCase().indexOf(q) >= 0
           || (a.c || '').toLowerCase().indexOf(q) >= 0)), false);
   }
@@ -561,6 +649,11 @@ async function renderArticle(id) {
     return wrap;
   }
   const c = chOf(a.ch);
+  markSeen(a.id);
+  const fresh = NAV_FRESH; NAV_FRESH = false;
+  const ctx = getCtx();
+  const inCtx = ctx && ctx.ch === a.ch && ctx.cat;       // 목록에서 칩을 골라 두고 들어왔다
+  const listHref = '#/c/' + a.ch + (inCtx ? '?cat=' + encodeURIComponent(ctx.cat) : '');
   if (a.gone) {
     const box = el('div', 'wrap');
     const g = el('div', 'tomb');
@@ -582,7 +675,7 @@ async function renderArticle(id) {
   }
   const bar = el('div', 'rbar');
   const back = el('a', 'back', '← 목록');
-  back.href = '#/c/' + a.ch;
+  back.href = listHref;
   const who = el('span', 'who');
   who.append(chIcon(c, 'xs'), el('span', null, c.label));
   bar.append(back, who);
@@ -629,6 +722,42 @@ async function renderArticle(id) {
   }
   wrap.append(frame);
 
+  // 이전/다음 — 같은 채널 안에서만, 칩을 골라 두고 들어왔으면 그 칩 안에서만
+  const pool = (INDEX.articles || []).filter(x => x.ch === a.ch && live(x)
+    && (!inCtx || (ctx.cat === EXP_CHIP ? soon(x) : x.c === ctx.cat)));
+  const at = pool.findIndex(x => x.id === a.id);
+  const pn = el('div', 'pn');
+  const mkPn = (b, cls, label) => {
+    const x = el('a', 'pn-a ' + cls);
+    x.append(el('span', 'pn-l', label), el('span', 'pn-t', b ? (b.t || '(제목 없음)') : '없음'));
+    if (!b) { x.classList.add('off'); return x; }
+    x.href = '#/a/' + b.id;
+    x.onclick = e => {
+      e.preventDefault();
+      savePos(a.id, scrollY);
+      NAV_FRESH = true;
+      // 히스토리를 쌓지 않는다 — 몇 편을 넘겨 봐도 뒤로가기 한 번이면 목록이다
+      history.replaceState(null, '', x.getAttribute('href'));
+      scrollTo(0, 0);
+      route();
+    };
+    return x;
+  };
+  pn.append(mkPn(pool[at - 1], 'prev', '← 이전 글 (더 최신)'), mkPn(pool[at + 1], 'next', '다음 글 (더 오래된) →'));
+  const scopeLbl = inCtx ? (ctx.cat === EXP_CHIP ? '곧 삭제' : ctx.cat) + ' 안에서' : c.label + ' 전체에서';
+  pn.append(el('div', 'pn-note', scopeLbl + ' ' + (at + 1) + ' / ' + pool.length + ' · 뒤로가기는 목록으로'));
+  wrap.append(pn);
+
+  // 읽던 위치(이 기기) — 이미지가 채워지며 높이가 바뀌므로 문서 뜰 때 한 번, 이미지 끝나면
+  // 한 번 더 맞춘다. 그 사이에 사용자가 직접 넘겼으면 건드리지 않는다.
+  const pos = fresh ? 0 : (posAll()[a.id] || 0);
+  let touched = false;
+  if (pos) {
+    addEventListener('wheel', () => { touched = true; }, { once: true, passive: true });
+    addEventListener('touchmove', () => { touched = true; }, { once: true, passive: true });
+  }
+  const restore = () => { if (pos && !touched && frame.isConnected) scrollTo(0, pos); };
+
   const html = await cachedFetch(a.p + '/index.html', a.saved);
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
@@ -657,7 +786,8 @@ async function renderArticle(id) {
         openZoom(t.src);
       }
     });
-    fillImages(d, a.p, a.saved, prog, fit);
+    restore();
+    fillImages(d, a.p, a.saved, prog, fit).then(restore);
   };
   return wrap;
 }
@@ -821,6 +951,8 @@ function navbar(active) {
   (INDEX.channels || []).forEach(c => {
     const a = el('a', c.id === active ? 'on' : '');
     a.append(chIcon(c, 'xs'), el('span', null, c.label));
+    const nn = (INDEX.articles || []).filter(x => x.ch === c.id && live(x) && isNew(x)).length;
+    if (nn) { const b = el('span', 'nb', nn > 99 ? '99+' : String(nn)); b.title = '이 기기에서 아직 안 연 새 글'; a.append(b); }
     a.href = '#/c/' + c.id;
     nav.append(a);
   });
@@ -838,7 +970,7 @@ async function route() {
     let node;
     if (kind === 'a' && arg)      node = await renderArticle(arg);
     else if (kind === 'c' && arg) node = renderChannel(arg, qs);
-    else                          node = renderHome();
+    else                          node = renderHome(qs);
     view.textContent = '';
     view.append(node);
     $('.top').classList.remove('hide');
@@ -912,11 +1044,23 @@ matchMedia('(prefers-color-scheme:dark)').addEventListener('change', () => {
   if (getTheme() === 'system') route();
 });
 
-// 목록을 떠나기 직전 위치를 남긴다 — hashchange 는 이미 새 해시라 여기서는 늦다
+// 떠나기 직전 위치를 남긴다 — hashchange 는 이미 새 해시라 여기서는 늦다
+function leaveSnapshot() {
+  const h = parseHash();
+  if (h.kind === 'a') { if (h.arg) savePos(h.arg, scrollY); }
+  else saveScroll();
+}
+addEventListener('pagehide', leaveSnapshot);
+addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leaveSnapshot(); });
 addEventListener('click', e => {
   const a = e.target.closest && e.target.closest('a[href^="#/"]');
   if (!a) return;
-  if (parseHash().kind !== 'a') saveScroll();
+  const h = parseHash();
+  leaveSnapshot();
+  // 목록에서 글로 들어가면 어떤 칩을 보고 있었는지 남긴다(글 안 이전/다음의 범위)
+  // (글 안의 이전/다음으로 옮길 때는 그대로 둔다 — 범위가 풀리면 안 된다)
+  if (a.getAttribute('href').indexOf('#/a/') === 0 && h.kind !== 'a')
+    setCtx(h.kind === 'c' ? { ch: h.arg, cat: h.qs.get('cat') || '' } : { ch: '', cat: '' });
   // 메뉴·카드로 목록에 '새로' 들어갈 땐 맨 위부터 — 지난번 읽던 자리는 뒤로가기 전용이다
   const to = a.getAttribute('href').slice(1);
   if (to.split('/')[1] !== 'a') { try { sessionStorage.removeItem(SCROLL_KEY + to.split('?')[0]); } catch (x) {} }
