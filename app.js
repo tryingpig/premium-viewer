@@ -100,6 +100,25 @@ const setCtx = c => { try { sessionStorage.setItem('pv-ctx', JSON.stringify(c));
 const getCtx = () => { try { return JSON.parse(sessionStorage.getItem('pv-ctx') || 'null'); } catch (e) { return null; } };
 let NAV_FRESH = false;              // 이전/다음으로 넘어온 글은 맨 위부터
 
+/* ── 노션으로 보낸 글 ────────────────────────
+ * 봇이 보낸 목록을 비밀 Gist(저장소 밖) 한 장에 적어 두고, 뷰어는 그걸 읽어 어느 기기에서든
+ * '보냄' 회색을 보여 준다. 중복 이관 자체는 PC 봇이 막으므로 이건 표시용이다.
+ * 방금 누른 기기에서는 Gist 가 갱신되기 전이라도 바로 회색으로(localStorage). */
+const GIST_ID = '2200fa4f158b0927cd6842c66d27e6b6';
+let SENT = {}, SENT_AT = 0, SENT_P = null;
+function loadSent(force) {
+  if (SENT_P && !force && Date.now() - SENT_AT < 60000) return SENT_P;
+  SENT_AT = Date.now();
+  SENT_P = fetch('https://api.github.com/gists/' + GIST_ID, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(j => { SENT = (JSON.parse(j.files['sent.json'].content).sent) || {}; return SENT; })
+    .catch(() => SENT);
+  return SENT_P;
+}
+const LSENT_KEY = 'pv-sent-local';
+const localSent = () => { try { return new Set(JSON.parse(localStorage.getItem(LSENT_KEY) || '[]')); } catch (e) { return new Set(); } };
+const markLocalSent = id => { try { const s = localSent(); s.add(id); localStorage.setItem(LSENT_KEY, JSON.stringify([...s].slice(-500))); } catch (e) {} };
+
 const dayLabel = dk => {
   if (!dk) return '날짜 없음';
   const d = new Date(dk + 'T00:00:00'), now = new Date();
@@ -279,6 +298,7 @@ async function pruneStore() {
 async function loadIndex(force) {
   if (INDEX && !force) return INDEX;
   INDEX = JSON.parse(await ghRaw('index.json'));
+  loadSent();
   (INDEX.channels || []).forEach((c, i) => { ACOF[c.id] = ACCENTS[i % ACCENTS.length]; });
   if (!PRUNED) { PRUNED = true; setTimeout(() => pruneStore().catch(() => {}), 4000); }
   return INDEX;
@@ -336,6 +356,7 @@ function row(a, showCh) {
     mt.append(pill);
   }
   if (a.c) mt.append(el('span', 'pill', a.c));
+  if (SENT[a.id]) mt.append(el('span', 'pill nt', '📝 노션'));
   if (a.d) mt.append(el('span', null, a.d));
   if (a.img) mt.append(el('span', 'dot'), el('span', null, '이미지 ' + a.img));
   if (a.miss) mt.append(el('span', 'dot'), el('span', null, '유실 ' + a.miss));
@@ -711,10 +732,30 @@ async function renderArticle(id) {
   // 노션으로 — 텔레그램 딥링크. 봇(pdf-telegram-bot)이 저장본을 그 채널 노션 DB 로 옮기고
   // 링크를 답한다. 뷰어는 저장소에 아무것도 쓰지 않는다.
   const nt = el('a', 'notion', '📝 노션');
-  nt.href = 'https://t.me/no1leeseul_bot?start=n_' + a.id;
   nt.target = '_blank';
   nt.rel = 'noopener';
-  nt.title = '이 글을 노션으로 옮기기 — 텔레그램이 열리면 시작을 누르세요';
+  const paintNt = () => {
+    const hit = SENT[a.id];
+    if (hit && hit.url) {
+      nt.textContent = '📝 노션 ✓';
+      nt.href = hit.url;
+      nt.classList.add('sent');
+      nt.title = '이미 노션에 있는 글 — 누르면 노션 페이지가 열립니다';
+    } else if (localSent().has(a.id)) {
+      nt.textContent = '📝 보냄…';
+      nt.href = 'https://t.me/no1leeseul_bot?start=n_' + a.id;
+      nt.classList.add('sent');
+      nt.title = '이 기기에서 보냈습니다. 봇이 끝내면 ✓ 로 바뀝니다 (다시 눌러도 중복 생성은 안 됩니다)';
+    } else {
+      nt.textContent = '📝 노션';
+      nt.href = 'https://t.me/no1leeseul_bot?start=n_' + a.id;
+      nt.classList.remove('sent');
+      nt.title = '이 글을 노션으로 옮기기 — 텔레그램이 열리면 시작을 누르세요';
+    }
+  };
+  nt.onclick = () => { if (!SENT[a.id]) { markLocalSent(a.id); setTimeout(paintNt, 0); } };
+  await loadSent();
+  paintNt();
 
   const grow = el('div', 'grow');
   grow.append(smaller, bigger, nt, src);

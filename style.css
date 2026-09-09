@@ -197,3 +197,6 @@ button.fs:active{transform:scale(.94)}
 .pn .pn-t{font-size:13.5px;font-weight:600;line-height:1.4;overflow:hidden;display:-webkit-box;
   -webkit-line-clamp:2;-webkit-box-orient:vertical}
 .pn-note{grid-column:1/-1;font-size:12px;color:var(--dim);text-align:center}
+/* ── 노션 보냄 표시 ── */
+.rbar .grow a.notion.sent{opacity:.55;border-style:dashed}
+.pill.nt{color:var(--dim);background:var(--chip);border:1px dashed var(--line)}
