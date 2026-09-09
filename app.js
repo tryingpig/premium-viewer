@@ -708,8 +708,16 @@ async function renderArticle(id) {
   src.target = '_blank';
   src.rel = 'noopener';
 
+  // 노션으로 — 텔레그램 딥링크. 봇(pdf-telegram-bot)이 저장본을 그 채널 노션 DB 로 옮기고
+  // 링크를 답한다. 뷰어는 저장소에 아무것도 쓰지 않는다.
+  const nt = el('a', 'notion', '📝 노션');
+  nt.href = 'https://t.me/no1leeseul_bot?start=n_' + a.id;
+  nt.target = '_blank';
+  nt.rel = 'noopener';
+  nt.title = '이 글을 노션으로 옮기기 — 텔레그램이 열리면 시작을 누르세요';
+
   const grow = el('div', 'grow');
-  grow.append(smaller, bigger, src);
+  grow.append(smaller, bigger, nt, src);
   bar.append(grow);
 
   const prog = el('div', 'prog');
