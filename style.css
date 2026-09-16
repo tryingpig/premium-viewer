@@ -200,3 +200,8 @@ button.fs:active{transform:scale(.94)}
 /* ── 노션 보냄 표시 ── */
 .rbar .grow a.notion.sent{opacity:.55;border-style:dashed}
 .pill.nt{color:var(--dim);background:var(--chip);border:1px dashed var(--line)}
+/* ── 새 글 표시 지우기 ── */
+h2.sec .readall{margin-left:auto;border:1px solid var(--line);background:var(--card);color:var(--dim);
+  border-radius:99px;padding:3px 10px;font-size:11.5px;cursor:pointer;font-weight:600}
+h2.sec .readall:hover{color:var(--ink);border-color:var(--accent)}
+#btn-readall{color:var(--accent);font-weight:700}

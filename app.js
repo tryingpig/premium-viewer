@@ -86,6 +86,17 @@ function markSeen(id) {
   SEEN.add(id);
   try { localStorage.setItem(SEEN_KEY, JSON.stringify([...SEEN].slice(-3000))); } catch (e) {}
 }
+/** 새 글 표시를 한 번에 지운다. chId 를 주면 그 채널만. 화면은 다시 그리지 않고 점·배지만 뗀다. */
+function markAllSeen(chId) {
+  (INDEX.articles || []).forEach(a => { if (live(a) && (!chId || a.ch === chId)) SEEN.add(a.id); });
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify([...SEEN].slice(-3000))); } catch (e) {}
+  document.querySelectorAll('.item.new').forEach(x => {
+    if (!chId || (x.getAttribute('href') || '').length && (INDEX.articles || []).some(a => '#/a/' + a.id === x.getAttribute('href') && a.ch === chId))
+      x.classList.remove('new');
+  });
+  document.querySelectorAll('.readall').forEach(x => x.remove());
+  navbar(parseHash().kind === 'c' ? parseHash().arg : null);
+}
 const posAll = () => { try { return JSON.parse(localStorage.getItem(POS_KEY) || '{}'); } catch (e) { return {}; } };
 function savePos(id, y) {
   const m = posAll();
@@ -481,6 +492,13 @@ function renderChannel(id, qs) {
   w.style.setProperty('--ac', ACOF[id] || 'var(--accent)');
   const head = el('h2', 'sec');
   head.append(chIcon(c, 'sm'), el('span', null, c.label + ' · ' + all.length.toLocaleString() + '편'));
+  const newN = all.filter(isNew).length;
+  if (newN) {
+    const ra = el('button', 'readall', '새 글 ' + newN + ' · 모두 읽음');
+    ra.type = 'button';
+    ra.onclick = () => markAllSeen(id);
+    head.append(ra);
+  }
   w.append(head);
 
   const filters = el('div', 'filters');
@@ -1005,6 +1023,9 @@ function navbar(active) {
     a.href = '#/c/' + c.id;
     nav.append(a);
   });
+  const total = (INDEX.articles || []).filter(x => live(x) && isNew(x)).length;
+  const ra = $('#btn-readall');
+  if (ra) { ra.hidden = !total; ra.title = '새 글 표시 ' + total + '개 모두 지우기'; }
   $('.top').hidden = false;
 }
 
@@ -1079,6 +1100,7 @@ $('#gate-ok').addEventListener('click', async e => {
 });
 $('#gate-cancel').addEventListener('click', () => $('#gate').close());
 $('#btn-settings').addEventListener('click', () => openGate(''));
+$('#btn-readall').addEventListener('click', () => markAllSeen());
 
 applyTheme(getTheme());
 $('#btn-theme').addEventListener('click', () => {
