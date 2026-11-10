@@ -81,15 +81,34 @@ const seenBase = () => {
   } catch (e) { return '9999'; }
 };
 const isNew = a => !SEEN.has(a.id) && (a.d || '').slice(0, 10) >= seenBase();
+/* 탭마다 SEEN 을 켤 때 한 번만 읽는다. 그대로 저장하면 먼저 열어 둔 탭이 다른 탭에서 읽은 글을
+ * 덮어써 지운다(다음 날 읽은 글이 다시 새 글로 뜬 원인) → 저장 직전에 저장분을 다시 읽어 합친다. */
+function pullSeen() {
+  try { JSON.parse(localStorage.getItem(SEEN_KEY) || '[]').forEach(id => SEEN.add(id)); } catch (e) {}
+}
+function saveSeen() {
+  pullSeen();
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify([...SEEN].slice(-3000))); } catch (e) {}
+}
 function markSeen(id) {
   if (SEEN.has(id)) return;
   SEEN.add(id);
-  try { localStorage.setItem(SEEN_KEY, JSON.stringify([...SEEN].slice(-3000))); } catch (e) {}
+  saveSeen();
 }
+/* 다른 탭에서 읽으면 이 탭의 점·배지도 뗀다 */
+addEventListener('storage', e => {
+  if (e.key !== SEEN_KEY || typeof INDEX === 'undefined' || !INDEX) return;
+  pullSeen();
+  document.querySelectorAll('.item.new').forEach(x => {
+    if (SEEN.has((x.getAttribute('href') || '').replace('#/a/', ''))) x.classList.remove('new');
+  });
+  if (!(INDEX.articles || []).some(a => live(a) && isNew(a))) document.querySelectorAll('.readall').forEach(x => x.remove());
+  navbar(parseHash().kind === 'c' ? parseHash().arg : null);
+});
 /** 새 글 표시를 한 번에 지운다. chId 를 주면 그 채널만. 화면은 다시 그리지 않고 점·배지만 뗀다. */
 function markAllSeen(chId) {
   (INDEX.articles || []).forEach(a => { if (live(a) && (!chId || a.ch === chId)) SEEN.add(a.id); });
-  try { localStorage.setItem(SEEN_KEY, JSON.stringify([...SEEN].slice(-3000))); } catch (e) {}
+  saveSeen();
   document.querySelectorAll('.item.new').forEach(x => {
     if (!chId || (x.getAttribute('href') || '').length && (INDEX.articles || []).some(a => '#/a/' + a.id === x.getAttribute('href') && a.ch === chId))
       x.classList.remove('new');
