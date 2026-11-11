@@ -1045,8 +1045,45 @@ function navbar(active) {
   const total = (INDEX.articles || []).filter(x => live(x) && isNew(x)).length;
   const ra = $('#btn-readall');
   if (ra) { ra.hidden = !total; ra.title = '새 글 표시 ' + total + '개 모두 지우기'; }
+  picker(active, total);
   $('.top').hidden = false;
 }
+
+/* 폰: 채널 줄 대신 '현재 채널 ▾' 버튼 하나 — 좁은 화면에선 채널 줄에 하나밖에 안 보여
+ * 메인으로 돌아가 갈아타야 했다. 누르면 채널 목록이 펼쳐진다. PC 는 CSS 로 감춘다. */
+function picker(active, total) {
+  const h = parseHash();
+  const cur = active || (h.kind === 'a' ? ((INDEX.articles || []).find(x => x.id === h.arg) || {}).ch : null);
+  const cc = cur && (INDEX.channels || []).find(c => c.id === cur);
+  const pk = $('#pick'), sh = $('#sheet');
+  pk.textContent = '';
+  pk.append(cc ? chIcon(cc, 'xs') : el('span', 'chi xs emoji', '🗂'), el('span', 'nm', cc ? cc.label : '전체 채널'));
+  if (total) pk.append(el('span', 'tot', total > 99 ? '99+' : String(total)));
+  pk.append(el('span', 'car', '▾'));
+  sh.textContent = '';
+  (INDEX.channels || []).forEach(c => {
+    const all = (INDEX.articles || []).filter(x => x.ch === c.id && live(x));
+    const nn = all.filter(isNew).length;
+    const a = el('a', c.id === cur ? 'on' : '');
+    a.href = '#/c/' + c.id;
+    a.append(chIcon(c), el('span', 'nm', c.label));
+    if (nn) a.append(el('span', 'b', nn > 99 ? '99+' : String(nn)));
+    a.append(el('span', 'n', all.length + '편'));
+    sh.append(a);
+  });
+  const home = el('a', 'home', '🏠 전체 채널 보기');
+  home.href = '#/';
+  sh.append(home);
+  sheetOpen(false);
+}
+function sheetOpen(on) {
+  $('#sheet').hidden = !on; $('#sheet-dim').hidden = !on;
+  $('#pick').setAttribute('aria-expanded', on ? 'true' : 'false');
+}
+$('#pick').addEventListener('click', () => sheetOpen($('#sheet').hidden));
+$('#sheet-dim').addEventListener('click', () => sheetOpen(false));
+$('#sheet').addEventListener('click', e => { if (e.target.closest('a')) sheetOpen(false); });
+addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sheet').hidden) sheetOpen(false); });
 
 async function route() {
   const view = $('#view');
@@ -1083,7 +1120,7 @@ async function route() {
 let lastY = 0;
 addEventListener('scroll', () => {
   const y = scrollY, top = $('.top');
-  if (!top || top.hidden) return;
+  if (!top || top.hidden || !$('#sheet').hidden) return;     // 채널 목록을 펼친 동안은 접지 않는다
   if (y > 140 && y > lastY + 6) top.classList.add('hide');
   else if (y < lastY - 6 || y < 90) top.classList.remove('hide');
   lastY = y;
