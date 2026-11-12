@@ -1047,10 +1047,11 @@ function navbar(active) {
   if (ra) { ra.hidden = !total; ra.title = '새 글 표시 ' + total + '개 모두 지우기'; }
   picker(active, total);
   $('.top').hidden = false;
+  layoutNav();
 }
 
 /* 폰: 채널 줄 대신 '현재 채널 ▾' 버튼 하나 — 좁은 화면에선 채널 줄에 하나밖에 안 보여
- * 메인으로 돌아가 갈아타야 했다. 누르면 채널 목록이 펼쳐진다. PC 는 CSS 로 감춘다. */
+ * 메인으로 돌아가 갈아타야 했다. 누르면 채널 목록이 펼쳐진다. 언제 보일지는 layoutNav 가 정한다. */
 function picker(active, total) {
   const h = parseHash();
   const cur = active || (h.kind === 'a' ? ((INDEX.articles || []).find(x => x.id === h.arg) || {}).ch : null);
@@ -1080,6 +1081,42 @@ function sheetOpen(on) {
   $('#sheet').hidden = !on; $('#sheet-dim').hidden = !on;
   $('#pick').setAttribute('aria-expanded', on ? 'true' : 'false');
 }
+/* 채널 줄이 한 화면에 다 안 들어갈 때: 터치 기기(폰·덱스·태블릿)는 '현재 채널 ▾'(html.compact),
+ * 마우스 PC 는 좌우 화살표 + 휠로 옆으로(html.scrolly). 덱스는 마우스를 써도 옆으로 밀 수가 없어 잘린 채널에 못 갔다. */
+const TOUCH = matchMedia('(any-pointer: coarse)').matches || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent)
+  || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform));
+function layoutNav() {
+  const root = document.documentElement, nav = $('#nav');
+  root.classList.remove('compact', 'scrolly');
+  const over = nav.scrollWidth > nav.clientWidth + 1;
+  if (innerWidth <= 560 || (TOUCH && over)) root.classList.add('compact');
+  else if (over) {
+    root.classList.add('scrolly');
+    const on = nav.querySelector('a.on');
+    if (on) nav.scrollLeft = on.offsetLeft - nav.offsetLeft - (nav.clientWidth - on.offsetWidth) / 2;
+  }
+  if (!root.classList.contains('compact')) sheetOpen(false);
+  navArrows();
+}
+function navArrows() {
+  const nav = $('#nav');
+  $('#nav-l').disabled = nav.scrollLeft <= 1;
+  $('#nav-r').disabled = nav.scrollLeft + nav.clientWidth >= nav.scrollWidth - 1;
+}
+$('#nav-l').addEventListener('click', () => $('#nav').scrollBy({ left: -$('#nav').clientWidth * .7, behavior: 'smooth' }));
+$('#nav-r').addEventListener('click', () => $('#nav').scrollBy({ left: $('#nav').clientWidth * .7, behavior: 'smooth' }));
+$('#nav').addEventListener('scroll', navArrows, { passive: true });
+$('#nav').addEventListener('wheel', e => {
+  const nav = $('#nav');
+  if (!document.documentElement.classList.contains('scrolly') || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  e.preventDefault();
+  nav.scrollLeft += e.deltaY;
+}, { passive: false });
+let navRaf = 0;
+addEventListener('resize', () => {
+  if (typeof INDEX === 'undefined' || !INDEX || $('.top').hidden) return;
+  cancelAnimationFrame(navRaf); navRaf = requestAnimationFrame(layoutNav);
+});
 $('#pick').addEventListener('click', () => sheetOpen($('#sheet').hidden));
 $('#sheet-dim').addEventListener('click', () => sheetOpen(false));
 $('#sheet').addEventListener('click', e => { if (e.target.closest('a')) sheetOpen(false); });
